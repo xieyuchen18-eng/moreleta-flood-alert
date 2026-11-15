@@ -65,7 +65,7 @@ h2{font-size:17px;margin:0 0 8px}
         <span><i style="background:#3399cc"></i>10–15</span><span><i style="background:#0000ff"></i>20–25</span>
         <span><i style="background:#9933cc"></i>30–40</span><span><i style="background:#800080"></i>&gt;50 mm/h</span>
         <span>⚡ 近 30 分钟闪电</span></div>
-      <p class="note">扇形弧线：15 km / 30 km / 约堡距离 / 扇区边缘（默认 100 km）；蓝色粗线 = Moreleta Spruit；虚线圈 = 上游集水区；可拖动红点修正住所位置。</p>
+      <p class="note">扇形弧线：15 km / 30 km / 约堡距离 / 扇区边缘（默认 100 km）；蓝色粗线 = Moreleta Spruit；虚线圈 = 上游集水区；住所标记默认锁定，点「调整住所位置」后才能拖动。</p>
     </section>
     <section class="card">
       <h2>集水区实况与外推</h2>
@@ -75,6 +75,8 @@ h2{font-size:17px;margin:0 0 8px}
         <button class="pri" id="btnRefresh">立即刷新</button>
         <button id="btnNotify">开启通知与警报声</button>
         <button id="btnDemo">演示模式</button>
+        <button id="btnHome">调整住所位置</button>
+        <button id="btnView">回到扇区全景</button>
       </div>
       <p id="msg"></p>
     </section>
@@ -177,7 +179,7 @@ async function fetchSat() {
   const ok = frames.filter(Boolean); if (ok.length < 3) throw new Error("卫星降水数据不足");
   const light = new Uint8Array(N*N);
   await Promise.all(Array.from({length: 6}, (_, i) => tL - i*300000).map(async t => {
-    try { const d = await wmsGrid("li_afa", new Date(t).toISOString()); for (let i = 0; i < N*N; i++) if (d[i*4+3] > 0) light[i] = 1; } catch(e) {}
+    try { const d = await wmsGrid("li_afa", new Date(t).toISOString()); for (let i = 0; i < N*N; i++) if (d[i*4+3] > 0 && d[i*4+1] < 150) light[i] = 1; } catch(e) {}   // 只取橙到深红（闪电频繁），忽略浅黄的零星闪电范围
   }));
   return {frames: ok, light, tL, G: geo()};
 }
@@ -299,10 +301,17 @@ function boltCells(light, G) {   // 闪电像元按约 7 km 方格归并，每�
   }
   return out.sort((a, b) => b.n - a.n).slice(0, 400);
 }
+function fitFan() {
+  if (!map) return; const h = [cfg.lat, cfg.lon], F = fanSpec();
+  map.fitBounds(L.latLngBounds([h, ...sector(h, F.R, F.dir - F.width/2, F.dir + F.width/2)]), {padding: [20, 20]});
+}
 function sector(c, r, d0, d1) { const pts = []; for (let b = d0; b <= d1 + .01; b += 3) pts.push(dest(c, r, b)); return pts; }
 function initMap() {
   if (typeof L === "undefined") { $("map").style.display = "none"; $("cv").style.display = "block"; return; }
-  map = L.map("map").setView([cfg.lat - .3, cfg.lon - .25], 8);
+  map = L.map("map");
+  let v = null; try { v = JSON.parse(localStorage.getItem("moreletaView") || "null"); } catch(e) {}
+  if (v) map.setView([v.lat, v.lng], v.z); else fitFan();
+  map.on("moveend", () => { const c = map.getCenter(); try { localStorage.setItem("moreletaView", JSON.stringify({lat: c.lat, lng: c.lng, z: map.getZoom()})); } catch(e) {} });
   L.tileLayer("https://server.arcgisonline.com/ArcGIS/rest/services/World_Street_Map/MapServer/tile/{z}/{y}/{x}",
     {maxZoom: 16, attribution: "© Esri · 降水/闪电 © EUMETSAT H SAF · 河道 © OpenStreetMap"}).addTo(map);
   deco = L.layerGroup().addTo(map);
@@ -327,8 +336,9 @@ function drawDeco() {
     L.polyline([dest(e, 2.5, (A.heading + 150) % 360), e, dest(e, 2.5, (A.heading + 210) % 360)], {color: "#111", weight: 4}).addTo(deco);
   }
   if (!homeMk) {
-    homeMk = L.marker(h, {draggable: true, title: "住所（可拖动）"}).addTo(map).bindTooltip("住所（可拖动修正）");
-    homeMk.on("dragend", () => { const p = homeMk.getLatLng(); cfg.lat = +p.lat.toFixed(4); cfg.lon = +p.lng.toFixed(4); save(); buildForm(); run(); });
+    homeMk = L.marker(h, {draggable: false, title: "住所"}).addTo(map).bindTooltip("住所");
+    homeMk.on("dragend", () => { const p = homeMk.getLatLng(); cfg.lat = +p.lat.toFixed(4); cfg.lon = +p.lng.toFixed(4); save(); buildForm();
+      homeMk.dragging.disable(); $("btnHome").textContent = "调整住所位置"; say(`住所已更新为 ${cfg.lat}, ${cfg.lon}，正在重新计算…`); run(); });
   } else homeMk.setLatLng(h);
 }
 function drawFrame(i) {
@@ -433,6 +443,10 @@ $("btnNotify").onclick = async () => {
   $("btnNotify").textContent = (window.Notification && Notification.permission === "granted") ? "通知与警报声已开启" : "警报声已开启（通知未授权）";
 };
 $("slider").oninput = e => drawFrame(+e.target.value);
+$("btnView").onclick = () => fitFan();
+$("btnHome").onclick = () => { if (!homeMk) return;
+  if (homeMk.dragging.enabled()) { homeMk.dragging.disable(); $("btnHome").textContent = "调整住所位置"; say("已取消调整"); }
+  else { homeMk.dragging.enable(); $("btnHome").textContent = "取消调整"; say("现在可以拖动地图上的住所标记，松手后自动保存"); } };
 addEventListener("resize", () => { if (A) { drawChart(); if (!map) drawFrame(+$("slider").value); } });
 
 initMap(); buildForm(); schedule(); run();
