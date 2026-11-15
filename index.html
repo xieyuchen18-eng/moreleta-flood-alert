@@ -1,0 +1,442 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Moreleta Spruit 洪水预警</title>
+<link rel="stylesheet" href="https://unpkg.com/leaflet@1.9.4/dist/leaflet.css">
+<script src="https://unpkg.com/leaflet@1.9.4/dist/leaflet.js"></script>
+<style>
+/* VOICE: calm instrument for a worried resident; IDEA: a river gauge board with a storm-watch fan
+   PICTURE: map with fan toward Johannesburg, river, catchment, satellite rain + lightning
+   COLOUR: deep river blue; warning colours only for level; TYPE: system CJK sans; LAYOUT: banner, map|figures, timeline, settings */
+:root{color-scheme:light dark;--bg:light-dark(#f4f7fa,#0c141c);--card:light-dark(#fff,#132230);--ink:light-dark(#10202e,#e3edf5);
+--mut:light-dark(#5a6b7a,#93a7b8);--line:light-dark(#dbe3ea,#22384a);--river:#0b5d8a;--l0:#2e9d5b;--l1:#e8b400;--l2:#ef7d00;--l3:#d32020}
+:root[data-theme=light]{color-scheme:light}:root[data-theme=dark]{color-scheme:dark}
+*{box-sizing:border-box;min-width:0}
+body{margin:0;background:var(--bg);color:var(--ink);font:16px/1.55 "Noto Sans SC","PingFang SC","Microsoft YaHei",system-ui,sans-serif}
+header{background:var(--river);color:#fff;padding:14px max(4vw,16px);display:flex;flex-wrap:wrap;gap:8px 20px;align-items:center;justify-content:space-between}
+header h1{margin:0;font-size:22px;line-height:1.2}header small{opacity:.85}
+main{max-width:1240px;margin:0 auto;padding:16px max(4vw,16px) 40px;display:grid;gap:16px}
+.card{background:var(--card);border:1px solid var(--line);border-radius:12px;padding:16px}
+#banner{border-radius:12px;padding:18px 20px;color:#fff;display:grid;gap:6px;transition:background .4s}
+#banner b{font-size:clamp(26px,5vw,40px);line-height:1.1}#banner p{margin:0}#banner ul{margin:4px 0 0;padding-left:20px}
+.row{display:grid;grid-template-columns:minmax(0,1.5fr) minmax(0,1fr);gap:16px}
+@media(max-width:860px){.row{grid-template-columns:minmax(0,1fr)}}
+#map,#cv{width:100%;height:520px;border-radius:10px;background:light-dark(#e6edf2,#0f1d29)}
+@media(max-width:600px){#map,#cv{height:420px}}
+#cv{display:none}
+.stats{display:grid;grid-template-columns:repeat(2,minmax(0,1fr));gap:10px}
+.st{border:1px solid var(--line);border-radius:10px;padding:10px 12px}
+.st span{display:block;color:var(--mut);font-size:13px}.st b{font-size:22px;white-space:nowrap}.st i{font-style:normal;font-size:14px;color:var(--mut)}
+.fan{margin-top:12px;border-collapse:collapse;width:100%;font-size:14px}
+.fan th,.fan td{padding:6px 4px;border-bottom:1px solid var(--line);text-align:right}.fan th:first-child,.fan td:first-child{text-align:left}
+.ctl{display:flex;flex-wrap:wrap;gap:8px;margin-top:12px;align-items:center}
+button{font:inherit;font-size:15px;min-height:44px;padding:0 16px;border-radius:8px;border:1px solid var(--line);background:var(--card);color:var(--ink);cursor:pointer}
+button.pri{background:var(--river);border-color:var(--river);color:#fff}
+button:focus-visible,input:focus-visible{outline:3px solid #4aa3df;outline-offset:2px}
+input[type=range]{width:100%;margin-top:8px}
+#chart{width:100%;height:180px;display:block}
+.leg{display:flex;flex-wrap:wrap;gap:6px 16px;font-size:13px;color:var(--mut);margin-top:6px}
+.leg i{display:inline-block;width:12px;height:12px;border-radius:2px;vertical-align:-1px;margin-right:4px}
+details summary{cursor:pointer;font-weight:600;min-height:32px}
+.form{display:grid;grid-template-columns:repeat(auto-fill,minmax(190px,1fr));gap:10px;margin-top:10px}
+.form label{font-size:13px;color:var(--mut);display:grid;gap:4px}
+.form input{font:inherit;font-size:16px;padding:8px;border-radius:8px;border:1px solid var(--line);background:var(--bg);color:var(--ink)}
+#msg{color:var(--mut);font-size:14px;min-height:20px}
+.note{font-size:13px;color:var(--mut);margin:0}
+h2{font-size:17px;margin:0 0 8px}
+.bolt{background:none;border:none;font-size:18px;line-height:18px;text-align:center;filter:drop-shadow(0 0 2px #000)}
+.lbl{background:none;border:none;box-shadow:none;font-weight:600;color:#0b3d5c;text-shadow:0 0 3px #fff,0 0 3px #fff}
+</style>
+</head>
+<body>
+<header><div><h1>Moreleta Spruit 短时洪水预警</h1><small>卫星降水 + 闪电 · 扇形警戒区 100 km（越过约翰内斯堡）</small></div>
+<small id="clock">—</small></header>
+<main>
+  <section id="banner" style="background:#5a6b7a"><b>正在加载卫星数据…</b><p>首次加载约需 10–30 秒</p></section>
+
+  <div class="row">
+    <section class="card">
+      <h2>警戒扇区与降水 <span id="ftime" class="note"></span></h2>
+      <div id="map"></div><canvas id="cv"></canvas>
+      <input type="range" id="slider" min="0" max="0" value="0" aria-label="时次">
+      <div class="leg"><span><i style="background:#ccffcc"></i>&lt;2</span><span><i style="background:#66cc66"></i>4–7</span>
+        <span><i style="background:#3399cc"></i>10–15</span><span><i style="background:#0000ff"></i>20–25</span>
+        <span><i style="background:#9933cc"></i>30–40</span><span><i style="background:#800080"></i>&gt;50 mm/h</span>
+        <span>⚡ 近 30 分钟闪电</span></div>
+      <p class="note">扇形弧线：15 km / 30 km / 约堡距离 / 扇区边缘（默认 100 km）；蓝色粗线 = Moreleta Spruit；虚线圈 = 上游集水区；可拖动红点修正住所位置。</p>
+    </section>
+    <section class="card">
+      <h2>集水区实况与外推</h2>
+      <div class="stats" id="stats"></div>
+      <table class="fan"><thead><tr><th>警戒扇区</th><th>最大雨强</th><th>强降水面积</th><th>闪电</th></tr></thead><tbody id="fanrows"></tbody></table>
+      <div class="ctl">
+        <button class="pri" id="btnRefresh">立即刷新</button>
+        <button id="btnNotify">开启通知与警报声</button>
+        <button id="btnDemo">演示模式</button>
+      </div>
+      <p id="msg"></p>
+    </section>
+  </div>
+
+  <section class="card">
+    <h2>上游集水区平均雨强（过去 2 小时 + 未来 1 小时外推）</h2>
+    <svg id="chart"></svg>
+    <div class="leg"><span><i style="background:var(--river)"></i>卫星实况</span><span><i style="background:#8fb8d4"></i>外推预报</span></div>
+  </section>
+
+  <section class="card">
+    <details><summary>设置（位置、集水区、扇区、阈值、手机推送）</summary>
+      <div class="form" id="form"></div>
+      <div class="ctl"><button class="pri" id="btnSave">保存并刷新</button><button id="btnReset">恢复默认</button></div>
+      <p class="note">扇区朝向 = 从住所看出去的方位角（0 北、90 东、180 南、270 西），默认对准约翰内斯堡。手机推送：安装 ntfy App 并订阅同一个主题名（请取复杂一些）。</p>
+    </details>
+  </section>
+  <p class="note">数据：EUMETSAT MTG 卫星 H SAF H40B 降水率（每 10 分钟，约 20 分钟延迟）与 LI 闪电（每 5 分钟）；Open-Meteo 降水；河道 © OpenStreetMap。卫星降水是估算值，局地暴雨可能低估。阈值为经验值，不能替代 SAWS 及市政官方预警。河水上涨时请远离河岸和低洼过水路面，切勿涉水或驾车通过积水。</p>
+</main>
+
+<script>
+{
+// ---------------- 配置
+const JHB = [-26.2041, 28.0473];
+const DEF = {lat:-25.7472, lon:28.3314, clat:-25.785, clon:28.295, radius:5, fanDir:"", fanWidth:120, fanR:100,
+  y:20, o:30, r:45, rateY:15, rateO:25, wet24:25, interval:10, notifyLvl:2, ntfy:""};
+const LABEL = {lat:"住所纬度", lon:"住所经度", clat:"集水区中心纬度", clon:"集水区中心经度", radius:"集水区半径 km",
+  fanDir:"扇区朝向°（空=约堡方向）", fanWidth:"扇区张角°", fanR:"扇区半径 km（默认 100）",
+  y:"黄色 1h 面雨量 mm", o:"橙色 1h 面雨量 mm", r:"红色 1h 面雨量 mm", rateY:"黄色 雨强 mm/h", rateO:"橙色 雨强 mm/h",
+  wet24:"前 24h 偏湿 mm", notifyLvl:"通知等级（1黄 2橙 3红）", interval:"刷新间隔 分钟", ntfy:"ntfy 主题名（可空）"};
+let cfg = {...DEF};
+try { const v3 = localStorage.getItem("moreletaCfg3");
+  if (v3) Object.assign(cfg, JSON.parse(v3));
+  else { const o = JSON.parse(localStorage.getItem("moreletaCfg2") || "{}"); for (const k of ["lat","lon","clat","clon","radius","ntfy"]) if (k in o) cfg[k] = o[k]; }
+} catch(e) {}
+if (cfg.fanR === "") cfg.fanR = 100;   // 旧版设置迁移
+
+// Moreleta Spruit 河道（OpenStreetMap，简化）
+const RIVER = [[[-25.8205,28.2787],[-25.8161,28.2804],[-25.8144,28.2837],[-25.8123,28.2907],[-25.8125,28.2955],[-25.8102,28.3006],[-25.8087,28.3013],[-25.8062,28.3029],[-25.8045,28.3037],[-25.8023,28.3032],[-25.7998,28.302],[-25.7976,28.2995],[-25.7954,28.2991],[-25.7939,28.2988],[-25.7914,28.2996],[-25.7889,28.3015],[-25.7873,28.3025],[-25.7848,28.3023],[-25.782,28.3017],[-25.7793,28.2995],[-25.777,28.2972],[-25.774,28.2967],[-25.7728,28.2939],[-25.7735,28.2919],[-25.774,28.2909],[-25.7721,28.2886],[-25.7699,28.2869],[-25.7669,28.2864],[-25.7645,28.2868],[-25.7628,28.2876],[-25.7598,28.2913],[-25.7556,28.2927],[-25.753,28.2941],[-25.7517,28.2964],[-25.7495,28.2964],[-25.7483,28.2968],[-25.7472,28.2992],[-25.7462,28.3003],[-25.7448,28.2981],[-25.7443,28.2997],[-25.7426,28.3023],[-25.7398,28.3055],[-25.7368,28.3071],[-25.7323,28.3088],[-25.7285,28.3093],[-25.7271,28.3047],[-25.7263,28.3012],[-25.7247,28.2996],[-25.7214,28.2973],[-25.7172,28.2985],[-25.7143,28.299],[-25.7135,28.2951],[-25.7101,28.2964],[-25.7065,28.2957],[-25.7023,28.2951],[-25.6981,28.2957],[-25.6957,28.2955],[-25.6931,28.2935],[-25.6888,28.2924],[-25.6864,28.2907],[-25.6832,28.2907],[-25.6804,28.29],[-25.6773,28.2913],[-25.6735,28.2926],[-25.6706,28.2928],[-25.6678,28.2943],[-25.6666,28.2969],[-25.6644,28.2987],[-25.6643,28.3025],[-25.6605,28.3064],[-25.6577,28.3079],[-25.655,28.3088],[-25.6522,28.3125],[-25.6514,28.3153],[-25.6526,28.3178],[-25.6516,28.3196],[-25.651,28.3231],[-25.6486,28.328]]];
+
+const N = 320, LA = 1.05;                      // 分析网格：住所为中心 ±1.05° 纬度（约 ±117 km）
+const LEVELS = [["绿色","无明显风险","var(--l0)"],["黄色预警","注意：河水可能上涨","var(--l1)"],
+  ["橙色预警","短时洪水可能，远离河岸低洼处","var(--l2)"],["红色预警","短时洪水很可能发生，立即远离河道！","var(--l3)"]];
+// H40B 色标（GeoServer intervals）：颜色 → 区间代表雨强 mm/h
+const PAL = [["ccffcc",1],["99e699",3],["66cc66",5.5],["33b333",8.5],["3399cc",12.5],["3366ff",17.5],["0000ff",22.5],["6600cc",27.5],["9933cc",35],["cc0099",45],["800080",60]]
+  .map(([h,v]) => [parseInt(h.slice(0,2),16), parseInt(h.slice(2,4),16), parseInt(h.slice(4,6),16), v]);
+const WMS = "https://view.eumetsat.int/geoserver/mtg_fd";
+
+const $ = id => document.getElementById(id);
+const say = t => { $("msg").textContent = t; };
+const fmt = (v, d=1) => (v == null || isNaN(v)) ? "—" : v.toFixed(d);
+const tstr = t => new Date(t).toLocaleTimeString("zh-CN", {timeZone:"Africa/Johannesburg", hour:"2-digit", minute:"2-digit"});
+const rad = d => d*Math.PI/180;
+
+// ---------------- 几何
+function geo() {
+  const lo = LA*111.0/(111.32*Math.cos(rad(cfg.lat)));
+  return {s: cfg.lat - LA, n: cfg.lat + LA, w: cfg.lon - lo, e: cfg.lon + lo, lo, kmpp: 2*LA*111.0/N};
+}
+const ll2px = (G, lat, lon) => [(lon - G.w)/(G.e - G.w)*N, (G.n - lat)/(G.n - G.s)*N];
+const px2ll = (G, x, y) => [G.n - y/N*(G.n - G.s), G.w + x/N*(G.e - G.w)];
+function distBear(a, b) {   // km, 方位角
+  const dy = (b[0] - a[0])*111.0, dx = (b[1] - a[1])*111.32*Math.cos(rad(a[0]));
+  return [Math.hypot(dx, dy), (Math.atan2(dx, dy)*180/Math.PI + 360) % 360];
+}
+const dest = (p, km, b) => [p[0] + km*Math.cos(rad(b))/111.0, p[1] + km*Math.sin(rad(b))/(111.32*Math.cos(rad(p[0])))];
+function fanSpec() {
+  const [d, b] = distBear([cfg.lat, cfg.lon], JHB);
+  return {dir: cfg.fanDir === "" ? b : +cfg.fanDir, width: +cfg.fanWidth || 120, R: Math.min(110, cfg.fanR === "" ? d : +cfg.fanR), jhbKm: d};
+}
+
+// ---------------- 数据获取
+const pcache = new Map();
+function rgb2rate(r, g, b) {
+  const k = (r<<16)|(g<<8)|b; if (pcache.has(k)) return pcache.get(k);
+  let best = 1e9, v = 0; for (const [R,G,B,val] of PAL) { const e = (r-R)**2 + (g-G)**2 + (b-B)**2; if (e < best) { best = e; v = val; } }
+  pcache.set(k, v); return v;
+}
+async function wmsGrid(layer, time) {
+  const G = geo();
+  const u = `${WMS}/${layer}/ows?service=WMS&version=1.3.0&request=GetMap&layers=${layer}&styles=&crs=EPSG:4326&bbox=${G.s},${G.w},${G.n},${G.e}&width=${N}&height=${N}&format=image/png&transparent=true&time=${time}`;
+  const r = await fetch(u); if (!r.ok || !(r.headers.get("content-type") || "").includes("png")) throw new Error(layer + " " + r.status);
+  const bmp = await createImageBitmap(await r.blob()), c = new OffscreenCanvas(N, N), g = c.getContext("2d");
+  g.drawImage(bmp, 0, 0); return g.getImageData(0, 0, N, N).data;
+}
+async function latest(layer) {
+  const t = await (await fetch(`${WMS}/${layer}/ows?service=WMS&request=GetCapabilities&version=1.3.0`)).text();
+  const m = t.match(/name="time"[^>]*default="([^"]+)"/); if (!m) throw new Error("无法获取 " + layer + " 时次");
+  return new Date(m[1]).getTime();
+}
+async function fetchSat() {
+  const [tR, tL] = await Promise.all([latest("h40b"), latest("li_afa")]);
+  const times = Array.from({length: 13}, (_, i) => tR - (12 - i)*600000);
+  const frames = await Promise.all(times.map(async t => {
+    try { const d = await wmsGrid("h40b", new Date(t).toISOString()), rr = new Float32Array(N*N);
+      for (let i = 0; i < N*N; i++) rr[i] = d[i*4+3] > 0 ? rgb2rate(d[i*4], d[i*4+1], d[i*4+2]) : 0;
+      return {t, rate: rr}; } catch(e) { return null; }
+  }));
+  const ok = frames.filter(Boolean); if (ok.length < 3) throw new Error("卫星降水数据不足");
+  const light = new Uint8Array(N*N);
+  await Promise.all(Array.from({length: 6}, (_, i) => tL - i*300000).map(async t => {
+    try { const d = await wmsGrid("li_afa", new Date(t).toISOString()); for (let i = 0; i < N*N; i++) if (d[i*4+3] > 0) light[i] = 1; } catch(e) {}
+  }));
+  return {frames: ok, light, tL, G: geo()};
+}
+async function fetchOM() {
+  try {
+    const q = new URLSearchParams({latitude:cfg.lat, longitude:cfg.lon, timezone:"Africa/Johannesburg", hourly:"precipitation",
+      past_days:1, forecast_days:1, minutely_15:"precipitation", forecast_minutely_15:4});
+    const d = await (await fetch("https://api.open-meteo.com/v1/forecast?" + q)).json();
+    const now = Date.now(), ht = d.hourly.time.map(s => new Date(s + ":00+02:00").getTime());
+    let idx = ht.findIndex(t => t > now) - 1; if (idx < 0) idx = ht.length >> 1;
+    return {past24: d.hourly.precipitation.slice(Math.max(0, idx-24), idx).reduce((a,b) => a + (b||0), 0),
+            next1h: (d.minutely_15?.precipitation || []).slice(0,4).reduce((a,b) => a + (b||0), 0)};
+  } catch(e) { return null; }
+}
+function demoSat() {   // 约堡方向来的雷暴，45 km/h 向东北移动
+  const G = geo(), k = G.kmpp, v = 45/6/k/Math.SQRT2, t0 = Math.floor(Date.now()/600000)*600000 - 12*600000;
+  const frames = [], light = new Uint8Array(N*N); let cx, cy;
+  for (let i = 0; i < 13; i++) {
+    cx = N/2 - 30 - v*(12-i); cy = N/2 + 30 + v*(12-i); const rr = new Float32Array(N*N);
+    for (let y = 0; y < N; y++) for (let x = 0; x < N; x++) {
+      const c = 55*Math.exp(-((x-cx)**2/120 + (y-cy)**2/60)), a = 6*Math.exp(-((x-cx+15)**2 + (y-cy-15)**2)/900), r = Math.max(c, a);
+      rr[y*N+x] = r < .5 ? 0 : PAL.reduce((b,p) => Math.abs(p[3]-r) < Math.abs(b-r) ? p[3] : b, 1);
+    }
+    frames.push({t: t0 + i*600000, rate: rr});
+  }
+  for (let y = 0; y < N; y++) for (let x = 0; x < N; x++) if ((x-cx)**2/60 + (y-cy)**2/30 < 1 && Math.random() < .5) light[y*N+x] = 1;
+  return {frames, light, tL: frames.at(-1).t, G};
+}
+
+// ---------------- 分析
+function shift(a, dy, dx) { const o = new Float32Array(N*N);
+  for (let y = 0; y < N; y++) { const sy = y - dy; if (sy < 0 || sy >= N) continue;
+    for (let x = 0; x < N; x++) { const sx = x - dx; if (sx >= 0 && sx < N) o[y*N+x] = a[sy*N+sx]; } }
+  return o; }
+function motion(a, b, steps) {
+  const n = N/2, A = new Float32Array(n*n), B = new Float32Array(n*n); let ca = 0, cb = 0;
+  for (let y = 0; y < n; y++) for (let x = 0; x < n; x++) { A[y*n+x] = a[2*y*N+2*x]; B[y*n+x] = b[2*y*N+2*x]; if (A[y*n+x] > 2) ca++; if (B[y*n+x] > 2) cb++; }
+  if (ca < 20 || cb < 20) return {vy:0, vx:0, conf:0};
+  let best = -1, by = 0, bx = 0; const s = 16;
+  for (let dy = -s; dy <= s; dy++) for (let dx = -s; dx <= s; dx++) { let sc = 0;
+    for (let y = Math.max(0,dy); y < Math.min(n, n+dy); y++) { const ro = y*n, so = (y-dy)*n;
+      for (let x = Math.max(0,dx); x < Math.min(n, n+dx); x++) sc += A[so + x - dx]*B[ro + x]; }
+    if (sc > best) { best = sc; by = dy; bx = dx; } }
+  let aa = 0, bb = 0; for (let i = 0; i < n*n; i++) { aa += A[i]*A[i]; bb += B[i]*B[i]; }
+  return {vy: by*2/steps, vx: bx*2/steps, conf: best/Math.sqrt(aa*bb + 1e-9)};
+}
+function analyse(S) {
+  const {frames, light, G} = S, k = G.kmpp, home = [cfg.lat, cfg.lon], F = fanSpec();
+  const [ccx, ccy] = ll2px(G, cfg.clat, cfg.clon), rpx = cfg.radius/k;
+  const catch_ = [], band = new Int8Array(N*N).fill(-1);
+  for (let y = 0; y < N; y++) for (let x = 0; x < N; x++) {
+    const i = y*N+x; if (Math.hypot(x-ccx, y-ccy) <= rpx) catch_.push(i);
+    const [d, b] = distBear(home, px2ll(G, x+.5, y+.5)); let db = Math.abs(b - F.dir) % 360; if (db > 180) db = 360 - db;
+    if (d <= F.R && db <= F.width/2) band[i] = d <= 15 ? 0 : d <= 30 ? 1 : d <= F.jhbKm ? 2 : 3;
+  }
+  const mean = a => catch_.reduce((s,i) => s + a[i], 0)/Math.max(1, catch_.length);
+  const frac = a => catch_.reduce((s,i) => s + (a[i] >= cfg.rateY ? 1 : 0), 0)/Math.max(1, catch_.length);
+  const max = a => catch_.reduce((m,i) => Math.max(m, a[i]), 0);
+  const tl = frames.at(-1).t, dt = 1/6;
+  const past = frames.map(f => ({t: f.t, mean: mean(f.rate), peak: max(f.rate)}));
+  const sum = from => past.filter(p => p.t > tl - from).reduce((s,p) => s + p.mean*dt, 0);
+  const obs30 = sum(1800000), obs1h = sum(3600000), obs2h = sum(1e12);
+  const peak = Math.max(0, ...past.filter(p => p.t > tl - 1800000).map(p => p.peak));
+  const now = frames.at(-1).rate;
+  const fan = [0,1,2,3].map(() => ({max: 0, heavy: 0, li: 0}));
+  for (let i = 0; i < N*N; i++) { const b = band[i]; if (b < 0) continue;
+    fan[b].max = Math.max(fan[b].max, now[i]); if (now[i] >= cfg.rateY) fan[b].heavy += k*k; if (light[i]) fan[b].li++; }
+  let liCatch = 0; for (const i of catch_) if (light[i]) liCatch++;
+  const st = frames.length >= 3 ? 2 : 1, mv = motion(frames.at(-1-st).rate, now, st);
+  const fc = []; let fc30 = 0, fc1h = 0, fcPeak = 0, eta = null;
+  for (let s = 1; s <= 6; s++) {
+    const r = shift(now, Math.round(mv.vy*s), Math.round(mv.vx*s)), m = mean(r), p = max(r);
+    fc1h += m*dt; if (s <= 3) fc30 += m*dt; fcPeak = Math.max(fcPeak, p);
+    if (eta == null && frac(r) >= .1) eta = s*10;   // 强降水覆盖集水区 ≥10% 才算"到达"
+    fc.push({t: tl + s*600000, mean: m, rate: r});
+  }
+  if (frac(now) >= .1) eta = 0;
+  const speed = Math.hypot(mv.vy, mv.vx)*k*6, heading = (Math.atan2(mv.vx, -mv.vy)*180/Math.PI + 360) % 360;
+  return {tl, obs30, obs1h, obs2h, peak, fc30, fc1h, fcPeak, eta, speed, heading, conf: mv.conf, mv, past, fc, fan, liCatch, F,
+          maxNow: max(now), fracNow: frac(now)};
+}
+function decide(a, om) {
+  // 原则：只有"上游真的会下够多的雨"才升级；远处的雷暴、零星闪电只作提示，不单独拉高等级
+  const wet = om && om.past24 >= cfg.wet24, f = wet ? .85 : 1, Y = cfg.y*f, O = cfg.o*f, R = cfg.r*f;
+  const why = [], note = []; let lvl = 0;
+  const roll = Math.max(a.obs1h, a.fc1h, a.obs30 + a.fc30);           // 未来/过去 1 小时上游面雨量
+  for (const [i, t] of [[3,R],[2,O],[1,Y]]) if (roll >= t) { lvl = i; why.push(`上游集水区 1 小时面雨量（实况+外推）约 ${fmt(roll)} mm，达到${LEVELS[i][0].replace("预警","")}标准 ${t.toFixed(0)} mm`); break; }
+  // 大面积强降水正在/即将覆盖上游：最多升到黄色；若同时雨量已接近橙色标准，升到橙色
+  if (a.eta != null && a.eta <= 30) {
+    if (roll >= Y*.7) { lvl = Math.max(lvl, roll >= O*.8 ? 2 : 1); why.push(a.eta === 0 ? "大片强降水正在上游集水区" : `大片强降水约 ${a.eta} 分钟后覆盖上游集水区`); }
+    else note.push(a.eta === 0 ? "上游有局部强降水，雨量尚不大" : `强降水约 ${a.eta} 分钟后可能到达上游`);
+  } else if (a.eta != null) note.push(`强降水约 ${a.eta} 分钟后可能到达上游`);
+  if (a.liCatch > 0) { if (roll >= Y*.5) { lvl = Math.max(lvl, 1); why.push("上游集水区有雷暴（闪电）并伴随明显降雨"); } else note.push("上游附近有闪电"); }
+  const [n, m, fr, ot] = a.fan, act = b => b.heavy >= 10 || b.li > 3;
+  if (act(n)) note.push(`15 km 内有${n.li > 3 ? "雷暴" : "强降水"}，留意上游变化`);
+  else if (act(m)) note.push(`15–30 km 有${m.li > 3 ? "雷暴" : "强降水"}`);
+  else if (act(fr)) note.push(`约堡方向 30 km 外有${fr.li > 3 ? "雷暴" : "强降水"}`);
+  else if (act(ot)) note.push(`约堡以外有${ot.li > 3 ? "雷暴" : "强降水"}`);
+  if (wet && lvl > 0) why.push(`前 24 小时已降雨 ${om.past24.toFixed(0)} mm，河道偏满，阈值已下调 15%`);
+  if (om && om.next1h >= Y && lvl === 0) note.push(`数值预报未来 1 小时约 ${fmt(om.next1h)} mm，留意`);
+  return {lvl, why, note};
+}
+
+// ---------------- 地图
+let map = null, ov = null, liLayer = null, deco = null, homeMk = null, S = null, A = null;
+function fieldCanvas(rate, light) {
+  const c = document.createElement("canvas"); c.width = c.height = N;
+  const ctx = c.getContext("2d"), im = ctx.createImageData(N, N);
+  for (let i = 0; i < N*N; i++) { const v = rate[i]; if (v > 0) { const p = PAL.find(p => p[3] === v) || PAL[0];
+      im.data[i*4] = p[0]; im.data[i*4+1] = p[1]; im.data[i*4+2] = p[2]; im.data[i*4+3] = 170; }
+  }
+  ctx.putImageData(im, 0, 0); return c;
+}
+function boltCells(light, G) {   // 闪电像元按约 7 km 方格归并，每格一个 ⚡
+  const B = 10, out = [];
+  for (let by = 0; by < N; by += B) for (let bx = 0; bx < N; bx += B) {
+    let n = 0; for (let y = by; y < Math.min(N, by+B); y++) for (let x = bx; x < Math.min(N, bx+B); x++) n += light[y*N+x];
+    if (n) out.push({ll: px2ll(G, bx + B/2, by + B/2), x: bx + B/2, y: by + B/2, n});
+  }
+  return out.sort((a, b) => b.n - a.n).slice(0, 400);
+}
+function sector(c, r, d0, d1) { const pts = []; for (let b = d0; b <= d1 + .01; b += 3) pts.push(dest(c, r, b)); return pts; }
+function initMap() {
+  if (typeof L === "undefined") { $("map").style.display = "none"; $("cv").style.display = "block"; return; }
+  map = L.map("map").setView([cfg.lat - .3, cfg.lon - .25], 8);
+  L.tileLayer("https://server.arcgisonline.com/ArcGIS/rest/services/World_Street_Map/MapServer/tile/{z}/{y}/{x}",
+    {maxZoom: 16, attribution: "© Esri · 降水/闪电 © EUMETSAT H SAF · 河道 © OpenStreetMap"}).addTo(map);
+  deco = L.layerGroup().addTo(map);
+}
+function drawDeco() {
+  if (!map) return; deco.clearLayers();
+  const h = [cfg.lat, cfg.lon], F = fanSpec(), a0 = F.dir - F.width/2, a1 = F.dir + F.width/2;
+  const fanPoly = [h, ...sector(h, F.R, a0, a1), h];
+  L.polygon(fanPoly, {color: "#d32020", weight: 2, fillColor: "#d32020", fillOpacity: .05}).addTo(deco);
+  for (const [r, c, t] of [[15, "#d32020", "15 km"], [30, "#ef7d00", "30 km"], [F.jhbKm, "#c9a000", "约堡 " + F.jhbKm.toFixed(0) + " km"]]) {
+    if (r >= F.R) continue;
+    L.polyline(sector(h, r, a0, a1), {color: c, weight: 2, dashArray: "4 6"}).addTo(deco);
+    L.marker(dest(h, r, F.dir), {icon: L.divIcon({className: "lbl", html: t, iconSize: [90, 16]})}).addTo(deco);
+  }
+  L.marker(dest(h, F.R, F.dir), {icon: L.divIcon({className: "lbl", html: `${F.R.toFixed(0)} km`, iconSize: [60, 16]})}).addTo(deco);
+  L.circleMarker(JHB, {radius: 5, color: "#333", fillColor: "#333", fillOpacity: 1}).bindTooltip("约翰内斯堡", {permanent: true, direction: "right"}).addTo(deco);
+  for (const line of RIVER) L.polyline(line, {color: "#0b5d8a", weight: 5, opacity: .85}).bindTooltip("Moreleta Spruit").addTo(deco);
+  L.circle([cfg.clat, cfg.clon], {radius: cfg.radius*1000, color: "#0b5d8a", weight: 2, dashArray: "6 6", fill: false}).bindTooltip("上游集水区").addTo(deco);
+  if (A && A.conf > .2 && A.speed > 3) {
+    const e = [cfg.clat, cfg.clon], s = dest(e, A.speed*.5, (A.heading + 180) % 360);
+    L.polyline([s, e], {color: "#111", weight: 4}).bindTooltip(`风暴移动 ${A.speed.toFixed(0)} km/h`).addTo(deco);
+    L.polyline([dest(e, 2.5, (A.heading + 150) % 360), e, dest(e, 2.5, (A.heading + 210) % 360)], {color: "#111", weight: 4}).addTo(deco);
+  }
+  if (!homeMk) {
+    homeMk = L.marker(h, {draggable: true, title: "住所（可拖动）"}).addTo(map).bindTooltip("住所（可拖动修正）");
+    homeMk.on("dragend", () => { const p = homeMk.getLatLng(); cfg.lat = +p.lat.toFixed(4); cfg.lon = +p.lng.toFixed(4); save(); buildForm(); run(); });
+  } else homeMk.setLatLng(h);
+}
+function drawFrame(i) {
+  if (!S || !A) return;
+  const all = [...S.frames.map(f => ({t: f.t, rate: f.rate, fc: false})), ...A.fc.map(f => ({t: f.t, rate: f.rate, fc: true}))];
+  const fr = all[i], isLast = i === S.frames.length - 1;
+  $("ftime").textContent = `${tstr(fr.t)} ${fr.fc ? "（外推）" : "（卫星实况）"}`;
+  const c = fieldCanvas(fr.rate, isLast ? S.light : null), G = S.G;
+  const bolts = isLast ? boltCells(S.light, G) : [];
+  if (map) { if (ov) map.removeLayer(ov); ov = L.imageOverlay(c.toDataURL(), [[G.s, G.w], [G.n, G.e]], {opacity: .85}).addTo(map);
+    if (!liLayer) liLayer = L.layerGroup().addTo(map); liLayer.clearLayers();
+    const icon = L.divIcon({className: "bolt", html: "⚡", iconSize: [18, 18], iconAnchor: [9, 9]});
+    for (const b of bolts) L.marker(b.ll, {icon, interactive: false, keyboard: false}).addTo(liLayer); }
+  else {
+    const cv = $("cv"), W = cv.clientWidth, H = cv.clientHeight; cv.width = W; cv.height = H;
+    const ctx = cv.getContext("2d"), sc = Math.min(W, H)/N, ox = (W - N*sc)/2, oy = (H - N*sc)/2;
+    ctx.imageSmoothingEnabled = false; ctx.drawImage(c, ox, oy, N*sc, N*sc);
+    const P = (lat, lon) => { const [x, y] = ll2px(G, lat, lon); return [ox + x*sc, oy + y*sc]; };
+    const F = fanSpec(), h = [cfg.lat, cfg.lon];
+    ctx.strokeStyle = "#d32020"; ctx.lineWidth = 2; ctx.beginPath();
+    [h, ...sector(h, F.R, F.dir - F.width/2, F.dir + F.width/2), h].forEach((p, j) => { const q = P(...p); j ? ctx.lineTo(...q) : ctx.moveTo(...q); }); ctx.stroke();
+    ctx.strokeStyle = "#0b5d8a"; ctx.lineWidth = 3; ctx.beginPath(); RIVER[0].forEach((p, j) => { const q = P(...p); j ? ctx.lineTo(...q) : ctx.moveTo(...q); }); ctx.stroke();
+    ctx.fillStyle = "#d32020"; ctx.beginPath(); ctx.arc(...P(...h), 5, 0, 7); ctx.fill();
+    ctx.font = "16px sans-serif"; ctx.textAlign = "center"; ctx.textBaseline = "middle";
+    for (const b of bolts) ctx.fillText("⚡", ox + b.x*sc, oy + b.y*sc);
+  }
+}
+function drawChart() {
+  const s = $("chart"), W = s.clientWidth, H = s.clientHeight, pts = [...A.past.map(p => ({...p, fc: false})), ...A.fc.map(p => ({...p, fc: true}))];
+  const mx = Math.max(5, ...pts.map(p => p.mean))*1.15, pad = 30, bw = (W - pad - 8)/pts.length, yv = v => H - 22 - (v/mx)*(H - 34);
+  let g = "";
+  for (const v of [0, mx/2, mx].map(Math.round)) g += `<line x1="${pad}" x2="${W}" y1="${yv(v)}" y2="${yv(v)}" stroke="currentColor" opacity=".15"/><text x="${pad-4}" y="${yv(v)+4}" font-size="11" text-anchor="end" fill="currentColor" opacity=".7">${v}</text>`;
+  pts.forEach((p, i) => { const x = pad + i*bw + 1, y = yv(p.mean);
+    g += `<rect x="${x}" y="${y}" width="${Math.max(1, bw-2)}" height="${H-22-y}" fill="${p.fc ? "#8fb8d4" : "var(--river)"}"><title>${tstr(p.t)} ${fmt(p.mean)} mm/h</title></rect>`;
+    if (i % (W < 520 ? 6 : 3) === 0) g += `<text x="${x + bw/2}" y="${H-6}" font-size="11" text-anchor="middle" fill="currentColor" opacity=".7">${tstr(p.t)}</text>`; });
+  s.innerHTML = g + `<text x="${pad}" y="11" font-size="11" fill="currentColor" opacity=".7">mm/h</text>`;
+}
+function render(om, D) {
+  const [name, desc, col] = LEVELS[D.lvl];
+  $("banner").style.background = col; $("banner").style.color = D.lvl === 1 ? "#1d1600" : "#fff";
+  $("banner").innerHTML = `<b>${name}</b><p>${desc}</p>${D.why.length ? "<ul>" + D.why.map(w => `<li>${w}</li>`).join("") + "</ul>" : ""}${D.note.length ? `<p style="opacity:.9">关注：${D.note.join("；")}</p>` : (D.why.length ? "" : "<p>上游没有足以引发河水上涨的降雨。</p>")}`;
+  const dirs = "北 东北 东 东南 南 西南 西 西北".split(" "), mv = A.conf > .2 && A.speed > 3;
+  const st = [["上游过去 30 分钟", fmt(A.obs30), "mm"], ["上游过去 1 小时", fmt(A.obs1h), "mm"],
+    ["上游未来 30 分钟（外推）", fmt(A.fc30), "mm"], ["上游未来 1 小时（外推）", fmt(A.fc1h), "mm"],
+    ["上游近 30 分钟最大雨强", fmt(A.peak, 0), "mm/h"], ["强降水到达上游", A.eta == null ? "无" : A.eta === 0 ? "正在下" : A.eta + " 分钟", ""],
+    ["降水系统移动", mv ? `向${dirs[Math.floor((A.heading + 22.5)/45) % 8]} ${A.speed.toFixed(0)}` : "—", mv ? "km/h" : ""],
+    ["前 24h 降雨 / 未来 1h 预报", om ? `${fmt(om.past24,0)} / ${fmt(om.next1h)}` : "—", "mm"]];
+  $("stats").innerHTML = st.map(([a,b,c]) => `<div class="st"><span>${a}</span><b>${b}</b> <i>${c}</i></div>`).join("");
+  const names = ["近圈 0–15 km", "中圈 15–30 km", `外圈 30–${A.F.jhbKm.toFixed(0)} km`, `远圈 ${A.F.jhbKm.toFixed(0)}–${A.F.R.toFixed(0)} km`];
+  $("fanrows").innerHTML = A.fan.map((b, i) => `<tr><td>${names[i]}</td><td>${fmt(b.max, 0)} mm/h</td><td>${b.heavy.toFixed(0)} km²</td><td>${b.li ? "有 ⚡" : "无"}</td></tr>`).join("");
+  const total = S.frames.length + A.fc.length; $("slider").max = total - 1; $("slider").value = S.frames.length - 1;
+  drawDeco(); drawFrame(S.frames.length - 1); drawChart();
+  $("clock").textContent = `卫星时次 ${tstr(A.tl)} SAST · 闪电 ${tstr(S.tL)} · 更新于 ${new Date().toLocaleTimeString("zh-CN")}`;
+}
+
+// ---------------- 警报
+let lastLvl = 0, prevLvl = 0, notifyOn = false, actx = null;
+function beep(n) { if (!actx) return; for (let i = 0; i < n; i++) { const o = actx.createOscillator(), g = actx.createGain();
+  o.frequency.value = 880; o.connect(g); g.connect(actx.destination); const t = actx.currentTime + i*.5;
+  g.gain.setValueAtTime(.25, t); g.gain.setValueAtTime(0, t + .3); o.start(t); o.stop(t + .35); } }
+async function alertUser(D) {
+  // 防误报：升级需连续两次刷新都达到该等级（红色立即通知）；降级到绿色才发解除
+  const conf = D.lvl === 3 || D.lvl <= prevLvl; prevLvl = D.lvl;
+  const up = conf && D.lvl > lastLvl && D.lvl >= cfg.notifyLvl, down = D.lvl === 0 && lastLvl >= cfg.notifyLvl;
+  if (up || D.lvl === 0) lastLvl = D.lvl; if (!up && !down) return;
+  const title = up ? `${LEVELS[D.lvl][0]}：${LEVELS[D.lvl][1]}` : "预警解除：上游降雨已减弱", body = D.why.join("；");
+  if (notifyOn && "Notification" in window && Notification.permission === "granted") { try { new Notification(title, {body}); } catch(e) {} }
+  if (up) beep(D.lvl + 1);
+  if (cfg.ntfy) { try { await fetch("https://ntfy.sh/" + encodeURIComponent(cfg.ntfy), {method: "POST", body: title + "\n" + body,
+      headers: {Title: "Moreleta flood alert", Priority: String(Math.min(5, 2 + D.lvl)), Tags: "warning"}}); } catch(e) { say("ntfy 推送失败：" + e.message); } }
+}
+
+// ---------------- 主流程
+let demo = false, timer = null, busy = false;
+async function run() {
+  if (busy) return; busy = true; say(demo ? "演示模式：模拟一个从约堡方向逼近的雷暴" : "正在获取卫星降水和闪电数据…");
+  try {
+    S = demo ? demoSat() : await fetchSat();
+    const om = demo ? {past24: 22, next1h: 8} : await fetchOM();
+    A = analyse(S); const D = decide(A, om); render(om, D); await alertUser(D);
+    if (!demo) say(`已加载 ${S.frames.length} 帧卫星降水，${cfg.interval} 分钟后自动刷新`);
+  } catch(e) { console.error(e); say("获取数据失败：" + e.message + "。请确认网络正常，并用 Chrome/Edge 打开下载后的文件（Claude 内的预览无法联网）。"); }
+  busy = false;
+}
+function schedule() { clearInterval(timer); timer = setInterval(() => { if (!demo) run(); }, Math.max(5, +cfg.interval || 10)*60000); }
+function save() { try { localStorage.setItem("moreletaCfg3", JSON.stringify(cfg)); } catch(e) {} }
+function buildForm() {
+  $("form").innerHTML = Object.keys(DEF).map(k => `<label for="f_${k}">${LABEL[k]}<input id="f_${k}" ${["ntfy","fanDir","fanR"].includes(k) ? 'type="text"' : 'type="number" step="any"'} value="${cfg[k]}"></label>`).join("");
+}
+$("btnSave").onclick = () => {
+  for (const k of Object.keys(DEF)) { const v = $("f_" + k).value.trim();
+    cfg[k] = ["ntfy","fanDir","fanR"].includes(k) ? (k === "ntfy" || v === "" ? v : (isNaN(+v) ? DEF[k] : +v)) : (v === "" || isNaN(+v) ? DEF[k] : +v); }
+  save(); schedule(); run();
+};
+$("btnReset").onclick = () => { cfg = {...DEF}; try { localStorage.removeItem("moreletaCfg3"); } catch(e) {} buildForm(); run(); };
+$("btnRefresh").onclick = () => { demo = false; $("btnDemo").textContent = "演示模式"; run(); };
+$("btnDemo").onclick = () => { demo = !demo; $("btnDemo").textContent = demo ? "退出演示" : "演示模式"; lastLvl = 0; prevLvl = 0; run(); };
+$("btnNotify").onclick = async () => {
+  try { actx = actx || new AudioContext(); await actx.resume(); } catch(e) {}
+  try { if ("Notification" in window) await Notification.requestPermission(); } catch(e) {}
+  notifyOn = true; beep(1);
+  $("btnNotify").textContent = (window.Notification && Notification.permission === "granted") ? "通知与警报声已开启" : "警报声已开启（通知未授权）";
+};
+$("slider").oninput = e => drawFrame(+e.target.value);
+addEventListener("resize", () => { if (A) { drawChart(); if (!map) drawFrame(+$("slider").value); } });
+
+initMap(); buildForm(); schedule(); run();
+}
+</script>
+</body>
+</html>
