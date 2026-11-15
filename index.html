@@ -64,7 +64,7 @@ h2{font-size:17px;margin:0 0 8px}
       <div class="leg"><span><i style="background:#ccffcc"></i>&lt;2</span><span><i style="background:#66cc66"></i>4–7</span>
         <span><i style="background:#3399cc"></i>10–15</span><span><i style="background:#0000ff"></i>20–25</span>
         <span><i style="background:#9933cc"></i>30–40</span><span><i style="background:#800080"></i>&gt;50 mm/h</span>
-        <span>⚡ 近 30 分钟闪电</span></div>
+        <span>⚡ 近 30 分钟闪电密集区</span></div>
       <p class="note">扇形弧线：15 km / 30 km / 约堡距离 / 扇区边缘（默认 100 km）；蓝色粗线 = Moreleta Spruit；虚线圈 = 上游集水区；住所标记默认锁定，点「调整住所位置」后才能拖动。</p>
     </section>
     <section class="card">
@@ -179,7 +179,7 @@ async function fetchSat() {
   const ok = frames.filter(Boolean); if (ok.length < 3) throw new Error("卫星降水数据不足");
   const light = new Uint8Array(N*N);
   await Promise.all(Array.from({length: 6}, (_, i) => tL - i*300000).map(async t => {
-    try { const d = await wmsGrid("li_afa", new Date(t).toISOString()); for (let i = 0; i < N*N; i++) if (d[i*4+3] > 0 && d[i*4+1] < 150) light[i] = 1; } catch(e) {}   // 只取橙到深红（闪电频繁），忽略浅黄的零星闪电范围
+    try { const d = await wmsGrid("li_afa", new Date(t).toISOString()); for (let i = 0; i < N*N; i++) if (d[i*4+3] > 0 && d[i*4+1] < 150) light[i] = Math.max(light[i], d[i*4+1] < 80 ? 2 : 1); } catch(e) {}   // 1=闪电较多（橙）2=闪电密集核心（红），浅黄零星范围忽略
   }));
   return {frames: ok, light, tL, G: geo()};
 }
@@ -205,7 +205,7 @@ function demoSat() {   // 约堡方向来的雷暴，45 km/h 向东北移动
     }
     frames.push({t: t0 + i*600000, rate: rr});
   }
-  for (let y = 0; y < N; y++) for (let x = 0; x < N; x++) if ((x-cx)**2/60 + (y-cy)**2/30 < 1 && Math.random() < .5) light[y*N+x] = 1;
+  for (let y = 0; y < N; y++) for (let x = 0; x < N; x++) if ((x-cx)**2/60 + (y-cy)**2/30 < 1 && Math.random() < .5) light[y*N+x] = 2;
   return {frames, light, tL: frames.at(-1).t, G};
 }
 
@@ -294,10 +294,10 @@ function fieldCanvas(rate, light) {
   ctx.putImageData(im, 0, 0); return c;
 }
 function boltCells(light, G) {   // 闪电像元按约 7 km 方格归并，每格一个 ⚡
-  const B = 10, out = [];
+  const B = 14, out = [];   // 约 10 km 一格，只标闪电密集核心
   for (let by = 0; by < N; by += B) for (let bx = 0; bx < N; bx += B) {
-    let n = 0; for (let y = by; y < Math.min(N, by+B); y++) for (let x = bx; x < Math.min(N, bx+B); x++) n += light[y*N+x];
-    if (n) out.push({ll: px2ll(G, bx + B/2, by + B/2), x: bx + B/2, y: by + B/2, n});
+    let n = 0; for (let y = by; y < Math.min(N, by+B); y++) for (let x = bx; x < Math.min(N, bx+B); x++) n += light[y*N+x] === 2 ? 1 : 0;
+    if (n >= B*B*.25) out.push({ll: px2ll(G, bx + B/2, by + B/2), x: bx + B/2, y: by + B/2, n});
   }
   return out.sort((a, b) => b.n - a.n).slice(0, 400);
 }
